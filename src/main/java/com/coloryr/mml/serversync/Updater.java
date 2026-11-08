@@ -7,15 +7,22 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
- * 自更新：从 GitHub 上的 index.json 取最新版本，把新 jar 下载到 jar 同目录的 update/ 下。
+ * 自更新：从 index.json 取最新版本，把新 jar 下载到 jar 同目录的 update/ 下。
+ *
+ * 索引地址的优先级：命令行 / 系统属性 / 环境变量显式指定 > jar 同目录的
+ * {@link #INDEX_FILE} 配置文件 > {@link #DEFAULT_INDEX}（本项目 GitHub Release）。
+ * 整合包只要随包放一份配置文件，就能把自更新指到自己的发布仓库。
  *
  * 不覆盖正在运行的 jar —— 那个文件被 JVM 独占，进程活着就换不掉；新版本留在目录里，
  * 下次启动由 {@link Bootstrap} 用独立类加载器装上，见 {@link UpdateClassLoader}。
@@ -23,9 +30,12 @@ import java.util.Map;
  * 整个过程不影响同步：任何一步失败只记一行日志。
  */
 final class Updater {
-    /** 默认索引：与更新用的 jar 放在同一个目录下 */
+    /** 没有配置文件时回落到本项目 fork 的 GitHub Release 资产 */
     static final String DEFAULT_INDEX =
-            "https://www.coloryr.com/mml-server-sync/index.json";
+            "https://github.com/Huaxidesu/mml-server-sync/releases/latest/download/index.json";
+
+    /** jar 同目录的索引配置文件：一行一个地址，# 开头为注释，取第一条有效行 */
+    static final String INDEX_FILE = "mml-server-sync-index.txt";
 
     /**
      * 原始更新器 jar 路径的系统属性键。
@@ -90,7 +100,11 @@ final class Updater {
         }
         String index = indexText == null ? "" : indexText.trim();
         if (index.isEmpty()) {
+            index = configIndex();
+        }
+        if (index.isEmpty()) {
             index = DEFAULT_INDEX;
+            Log.info(Text.of(Msg.UPDATE_INDEX_DEFAULT_USED, index));
         }
         byte[] body;
         try {
@@ -139,6 +153,76 @@ final class Updater {
         writeSidecar(target, SHA256_SIDECAR, sha256);
         prune(dir, target);
         Log.info(Text.of(Msg.UPDATER_DOWNLOADED, target));
+    }
+
+    /**
+     * 读 jar 同目录的索引配置文件。
+     *
+     * 找不到、读不了、内容为空都返回空串，由调用方回落到 {@link #DEFAULT_INDEX}。
+     * 只取第一条非空、非注释行，方便玩家直接手写或由整合包随包覆盖。
+     *
+     * # 返回值
+     *
+     * 配置文件里的索引地址；未配置时是空串
+     */
+    private static String configIndex() {
+        for (Path dir : configDirs()) {
+            Path file = dir.resolve(INDEX_FILE);
+            if (!Files.isRegularFile(file)) {
+                continue;
+            }
+            try {
+                for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                    String value = line.trim();
+                    if (value.isEmpty() || value.startsWith("#")) {
+                        continue;
+                    }
+                    Log.info(Text.of(Msg.UPDATE_INDEX_FROM_FILE, file, value));
+                    return value;
+                }
+            } catch (IOException e) {
+                Log.info(Text.of(Msg.UPDATE_INDEX_FILE_UNREADABLE, file, describe(e)));
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 配置文件可能所在的目录，按优先级排列。
+     *
+     * 入口捕获的原始 jar 同目录最可靠；从 update/ 包运行时再补它的上级目录；
+     * 最后兜底用工作目录，覆盖其它启动方式。
+     *
+     * # 返回值
+     *
+     * 待查目录列表
+     */
+    private static List<Path> configDirs() {
+        List<Path> out = new ArrayList<>();
+        try {
+            Path original = originalJarPath();
+            if (original != null) {
+                Path parent = original.toAbsolutePath().normalize().getParent();
+                if (parent != null) {
+                    out.add(parent);
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 系统属性里的路径不合法时跳过这一项
+        }
+        Path running = jarPath();
+        if (running != null) {
+            Path parent = running.toAbsolutePath().normalize().getParent();
+            if (parent != null) {
+                out.add(parent);
+                if (UPDATE_DIR.equalsIgnoreCase(String.valueOf(parent.getFileName()))
+                        && parent.getParent() != null) {
+                    out.add(parent.getParent());
+                }
+            }
+        }
+        out.add(Paths.get(System.getProperty("user.dir", ".")).toAbsolutePath().normalize());
+        return out;
     }
 
     /** 把原始 jar 路径记进系统属性，供同步计划跳过自身条目；须在入口最先调用 */

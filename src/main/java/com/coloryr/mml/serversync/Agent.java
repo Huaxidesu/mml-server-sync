@@ -6,14 +6,12 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Optional;
 
 /**
  * -javaagent 入口。
  *
  * 用法：-javaagent:mml-server-sync.jar=http://example.com/server.json
- * agent 在游戏 main 之前执行同步；如果认出是 MML 启动器，直接跳过。
- * 设环境变量 MML_SKIP=true 可以强制跳过这段识别，用于在 MML 下验证同步。
+ * agent 在游戏 main 之前执行同步；不再识别启动器，任何启动器下都照常同步。
  */
 public final class Agent {
     private Agent() {}
@@ -22,12 +20,6 @@ public final class Agent {
         // premain 从 -javaagent 指定的原始 jar 加载，此刻的类加载源就是原始 jar
         Updater.captureSelfJar();
         Path gameDir = gameDir();
-        if (skipLauncherCheck()) {
-            System.out.println(Log.PREFIX + Text.of(Msg.MML_SKIP_IS_SET_SKIPPING_THE_MML_LAUNCHER_CHECK));
-        } else if (isMmlLauncher(gameDir)) {
-            System.out.println(Log.PREFIX + Text.of(Msg.MML_LAUNCHER_DETECTED_SKIPPING_SERVER_PACK_SYNC));
-            return;
-        }
         String manifest = agentArgs == null ? "" : agentArgs.trim();
         if (manifest.isEmpty()) {
             throw new RuntimeException(Text.of(Msg.MML_SERVER_SYNC_JAVAAGENT_ARGUMENT_IS_MISSING_THE_MANIFEST_URL));
@@ -199,35 +191,7 @@ public final class Agent {
         return gameDir.resolve(".mml-server-sync");
     }
 
-    /** 是否强制跳过 MML 启动器识别，由环境变量 MML_SKIP 控制。 */
-    private static boolean skipLauncherCheck() {
-        return truthy(System.getenv("MML_SKIP"));
-    }
-
-    /** 是否是 MML 启动器起的游戏进程。 */
-    static boolean isMmlLauncher(Path gameDir) {
-        if (truthy(System.getProperty("mml.launcher"))) {
-            return true;
-        }
-        // MML 1.4.0+ 会显式写 MML_LAUNCHER=1（见 game_launch.rs 的 mml_env）
-        if (truthy(System.getenv("MML_LAUNCHER"))) {
-            return true;
-        }
-        if (hasMmlGameArgs(gameDir)) {
-            return true;
-        }
-        // FCL / PojavLauncher 等安卓启动器会把 XDG_DATA_HOME 放进版本目录，
-        // 与 MML 的「用户目录隔离」特征撞车，先排除，避免误跳过同步
-        if (isAndroidLauncher()) {
-            return false;
-        }
-        if (isolatedToInstance(gameDir)) {
-            return true;
-        }
-        return parentLooksLikeMml();
-    }
-
-    /** FCL / PojavLauncher 等安卓启动器的环境特征；MML 是桌面端，不会带这些变量 */
+    /** FCL / PojavLauncher 等安卓启动器的环境特征；用于手机端界面缩放 */
     static boolean isAndroidLauncher() {
         // 启动器会把 os.version 写成 Android-15 / Android-16
         if (System.getProperty("os.version", "").toLowerCase(Locale.ROOT).contains("android")) {
@@ -244,54 +208,6 @@ public final class Agent {
         return false;
     }
 
-    /** MML 游戏进程会带 ARG_GAME_DIR / ARG_GAME_BASE_DIR 等启动参数环境变量。 */
-    private static boolean hasMmlGameArgs(Path gameDir) {
-        String game = System.getenv("ARG_GAME_DIR");
-        String base = System.getenv("ARG_GAME_BASE_DIR");
-        String uuid = System.getenv("ARG_GAME_UUID");
-        Path instance = gameDir.getParent();
-        if (samePath(game, gameDir) && instance != null && samePath(base, instance)) {
-            return true;
-        }
-        return uuid != null && !uuid.trim().isEmpty() && samePath(game, gameDir);
-    }
-
-    /**
-     * MML 会默认隔离用户目录，把 HOME / USERPROFILE / APPDATA / LOCALAPPDATA 指到实例根目录。
-     * 这是现有 MML 版本一定会传的环境变量特征。
-     */
-    private static boolean isolatedToInstance(Path gameDir) {
-        Path instance = gameDir.getParent();
-        if (instance == null) {
-            return false;
-        }
-        String[] exact = {"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"};
-        for (String key : exact) {
-            String value = System.getenv(key);
-            if (samePath(value, instance) || samePath(value, gameDir)) {
-                return true;
-            }
-        }
-        if (samePath(System.getProperty("user.home"), instance)
-                || samePath(System.getProperty("user.home"), gameDir)) {
-            return true;
-        }
-        // 不再按 XDG_* 前缀判定：FCL 等安卓启动器也会把 XDG_DATA_HOME 放进版本目录。
-        // MML 隔离时一定会把上面的 HOME / USERPROFILE / APPDATA / LOCALAPPDATA 指到实例根目录。
-        return false;
-    }
-
-    private static boolean samePath(String value, Path expected) {
-        if (value == null || value.trim().isEmpty()) {
-            return false;
-        }
-        try {
-            return Paths.get(value).toAbsolutePath().normalize().equals(expected.toAbsolutePath().normalize());
-        } catch (RuntimeException e) {
-            return false;
-        }
-    }
-
     private static boolean truthy(String value) {
         if (value == null) {
             return false;
@@ -301,33 +217,4 @@ public final class Agent {
                 || "mml".equals(text);
     }
 
-    /**
-     * 旧版 MML 没有写环境变量时的兜底：Java 9+ 反射读父进程命令行。
-     * Java 8 没有 ProcessHandle，只能靠环境变量，捕获所有反射异常。
-     */
-    private static boolean parentLooksLikeMml() {
-        try {
-            Class<?> handle = Class.forName("java.lang.ProcessHandle");
-            Object current = handle.getMethod("current").invoke(null);
-            Object parentValue = handle.getMethod("parent").invoke(current);
-            if (!(parentValue instanceof Optional) || !((Optional<?>) parentValue).isPresent()) {
-                return false;
-            }
-            Object parent = ((Optional<?>) parentValue).get();
-            Object info = handle.getMethod("info").invoke(parent);
-            Class<?> infoClass = Class.forName("java.lang.ProcessHandle$Info");
-            Object commandValue = infoClass.getMethod("command").invoke(info);
-            if (!(commandValue instanceof Optional) || !((Optional<?>) commandValue).isPresent()) {
-                return false;
-            }
-            String command = String.valueOf(((Optional<?>) commandValue).get())
-                    .toLowerCase(Locale.ROOT).replace('\\', '/');
-            return command.contains("mml-gui")
-                    || command.contains("modernminecraftlauncher")
-                    || command.contains("mml_launcher")
-                    || command.contains("mml-launcher");
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
 }

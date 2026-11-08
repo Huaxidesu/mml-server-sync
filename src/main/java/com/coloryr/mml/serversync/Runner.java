@@ -361,7 +361,6 @@ public final class Runner {
         System.out.println();
         System.out.println(Text.of(Msg.JAVA_AGENT_RECOMMENDED));
         System.out.println(Text.of(Msg.JAVAAGENT_MML_SERVER_SYNC_JAR_URL_OF_SERVER_JSON));
-        System.out.println(Text.of(Msg.SKIPPED_AUTOMATICALLY_UNDER_THE_MML_LAUNCHER_SET_MML_SKIP_TRUE_TO_FORCE_IT_THE_WORKING_DIRECTORY_MUST_BE_MINECRAFT));
         System.out.println();
         System.out.println(Text.of(Msg.COMMAND_LINE));
         System.out.println(Text.of(Msg.JAVA_JAR_MML_SERVER_SYNC_JAR_MANIFEST_URL_FILE_GAME_DIR_DIR_OPTIONS));
@@ -383,7 +382,7 @@ public final class Runner {
         System.out.println(Text.of(Msg.ASK_ON_FAILURE_PROMPT_FOR_A_CHOICE_WHEN_THE_UPDATE_FAILS));
         System.out.println(Text.of(Msg.NO_ASK_DO_NOT_ASK_ABOUT_OPTIONAL_MODS_UPDATE_ALL));
         System.out.println(Text.of(Msg.NO_UPDATE_DO_NOT_CHECK_FOR_SELF_UPDATES));
-        System.out.println(Text.of(Msg.UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON));
+        System.out.println(Text.of(Msg.UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT));
         System.out.println(Text.of(Msg.QUIET_LESS_OUTPUT));
         System.out.println(Text.of(Msg.VERSION_SHOW_VERSION));
         System.out.println(Text.of(Msg.HELP_H_SHOW_HELP));
@@ -398,7 +397,7 @@ public final class Runner {
         System.out.println(Text.of(Msg.ONLY_FILES_ARCHIVES_BASE_OF_THE_MML_SERVER_JSON_ARE_READ));
         System.out.println(Text.of(Msg.CURSEFORGE_ENTRIES_WITHOUT_A_URL_FALL_BACK_TO_THE_CDN_MODRINTH_USES_ITS_PUBLIC_API));
         System.out.println(Text.of(Msg.ONLY_ZIP_CONFIG_PACKS_ARE_SUPPORTED_THE_GENERATOR_EMITS_ZIP_FOR_ARCHIVES_BASE));
-        System.out.println(Text.of(Msg.MML_SKIP_TRUE_SKIPS_THE_MML_LAUNCHER_DETECTION));
+        System.out.println(Text.of(Msg.UPDATE_INDEX_FILE_NOTE));
         System.out.println(Text.of(Msg.MANAGED_FILES_DROPPED_FROM_THE_NEW_MANIFEST_ARE_REMOVED_FILES_OUTSIDE_IT_ARE_UNTOUCHED));
         System.out.println(Text.of(Msg.LANGUAGE_NOTE));
         System.out.println(Text.of(Msg.UI_SCALE_NOTE));

@@ -6,8 +6,6 @@ package com.coloryr.mml.serversync;
  * 调用处只写键，不写原文，见 {@link Text#of}。
  */
 enum Msg {
-    MML_SKIP_IS_SET_SKIPPING_THE_MML_LAUNCHER_CHECK("MML_SKIP 已设置，跳过 MML 启动器检查", "MML_SKIP is set, skipping the MML launcher check"),
-    MML_LAUNCHER_DETECTED_SKIPPING_SERVER_PACK_SYNC("检测到 MML 启动器，跳过服务器包同步", "MML launcher detected, skipping server pack sync"),
     MML_SERVER_SYNC_JAVAAGENT_ARGUMENT_IS_MISSING_THE_MANIFEST_URL("mml-server-sync: -javaagent 参数缺少清单 URL", "mml-server-sync: -javaagent argument is missing the manifest URL"),
     MML_SERVER_SYNC_UPDATE_FAILED_GAME_START_ABORTED("mml-server-sync 更新失败，已中止游戏启动", "mml-server-sync update failed, game start aborted"),
     UPDATE_PACKAGE_FAILED("更新包执行失败: ", "Update package failed: "),
@@ -92,10 +90,9 @@ enum Msg {
     FAILED_TO_READ_SKIP_FILE("--skip-file 读取失败: ", "Failed to read --skip-file: "),
     THREADS_NEEDS_AN_INTEGER("--threads 需要整数: ", "--threads needs an integer: "),
     IS_MISSING_A_VALUE(" 缺少值", " is missing a value"),
-    STANDALONE_SERVER_INSTANCE_UPDATER_FOR_PRE_LAUNCH_UPDATES_FROM_NON_MML_LAUNCHERS("独立服务器实例更新器，适用于非 MML 启动器的 pre-launch 更新。", "Standalone server instance updater for pre-launch updates from non-MML launchers."),
+    STANDALONE_SERVER_INSTANCE_UPDATER_FOR_PRE_LAUNCH_UPDATES_FROM_NON_MML_LAUNCHERS("独立服务器实例更新器，任何启动器下都在游戏启动前同步。", "Standalone server instance updater; syncs before launch under any launcher."),
     JAVA_AGENT_RECOMMENDED("Java Agent（推荐）:", "Java Agent (recommended):"),
     JAVAAGENT_MML_SERVER_SYNC_JAR_URL_OF_SERVER_JSON("  -javaagent:mml-server-sync.jar=<server.json 的 URL>", "  -javaagent:mml-server-sync.jar=<URL of server.json>"),
-    SKIPPED_AUTOMATICALLY_UNDER_THE_MML_LAUNCHER_SET_MML_SKIP_TRUE_TO_FORCE_IT_THE_WORKING_DIRECTORY_MUST_BE_MINECRAFT("  MML 启动器启动时自动跳过，MML_SKIP=true 可强制不跳过；游戏工作目录必须是 .minecraft。", "  Skipped automatically under the MML launcher; set MML_SKIP=true to force it. The working directory must be .minecraft."),
     COMMAND_LINE("命令行用法:", "Command line:"),
     JAVA_JAR_MML_SERVER_SYNC_JAR_MANIFEST_URL_FILE_GAME_DIR_DIR_OPTIONS("  java -jar mml-server-sync.jar --manifest <URL|文件> --game-dir <目录> [选项]", "  java -jar mml-server-sync.jar --manifest <URL|file> --game-dir <dir> [options]"),
     OPTIONS("参数:", "Options:"),
@@ -114,7 +111,7 @@ enum Msg {
     NO_GUI_DO_NOT_SHOW_THE_PROGRESS_WINDOW("  --no-gui            不显示同步进度窗口", "  --no-gui            Do not show the progress window"),
     NO_ASK_DO_NOT_ASK_ABOUT_OPTIONAL_MODS_UPDATE_ALL("  --no-ask            不弹可选模组勾选窗，全部更新", "  --no-ask            Do not ask about optional mods; update all"),
     NO_UPDATE_DO_NOT_CHECK_FOR_SELF_UPDATES("  --no-update         不检查自更新", "  --no-update         Do not check for self-updates"),
-    UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON("  --update-index      自更新索引地址；默认 https://www.coloryr.com/mml-server-sync/index.json", "  --update-index      Self-update index URL; default https://www.coloryr.com/mml-server-sync/index.json"),
+    UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT("  --update-index      自更新索引地址；默认读同目录 mml-server-sync-index.txt，没有才用 GitHub Release", "  --update-index      Self-update index URL; defaults to mml-server-sync-index.txt next to the jar, then GitHub Release"),
     QUIET_LESS_OUTPUT("  --quiet             少输出", "  --quiet             Less output"),
     VERSION_SHOW_VERSION("  --version           显示版本", "  --version           Show version"),
     HELP_H_SHOW_HELP("  --help, -h          显示帮助", "  --help, -h          Show help"),
@@ -124,7 +121,7 @@ enum Msg {
     ONLY_FILES_ARCHIVES_BASE_OF_THE_MML_SERVER_JSON_ARE_READ("  - 只读取 MML server.json 的 Files / Archives / Base。", "  - Only Files / Archives / Base of the MML server.json are read."),
     CURSEFORGE_ENTRIES_WITHOUT_A_URL_FALL_BACK_TO_THE_CDN_MODRINTH_USES_ITS_PUBLIC_API("  - CurseForge 没有 URL 时用 fileId 推 CDN；Modrinth 用公开 API 查地址。", "  - CurseForge entries without a URL fall back to the CDN; Modrinth uses its public API."),
     ONLY_ZIP_CONFIG_PACKS_ARE_SUPPORTED_THE_GENERATOR_EMITS_ZIP_FOR_ARCHIVES_BASE("  - 只支持 zip 配置包；生成器的 Archives / Base 都是 zip。", "  - Only zip config packs are supported; the generator emits zip for Archives / Base."),
-    MML_SKIP_TRUE_SKIPS_THE_MML_LAUNCHER_DETECTION("  - 环境变量 MML_SKIP=true 跳过 MML 启动器识别。", "  - MML_SKIP=true skips the MML launcher detection."),
+    UPDATE_INDEX_FILE_NOTE("  - 自更新索引：jar 同目录 mml-server-sync-index.txt（一行一个地址）优先；没有才回落到本项目 GitHub Release。", "  - Self-update index: mml-server-sync-index.txt next to the jar wins; otherwise this project's GitHub Release."),
     MANAGED_FILES_DROPPED_FROM_THE_NEW_MANIFEST_ARE_REMOVED_FILES_OUTSIDE_IT_ARE_UNTOUCHED("  - 会删除旧清单里有、当前清单没有的受管文件；不碰清单外的用户文件。", "  - Managed files dropped from the new manifest are removed; files outside it are untouched."),
     FETCHING_MANIFEST_FINGERPRINT("正在获取清单指纹", "Fetching manifest fingerprint"),
     DOWNLOADING_MANIFEST("正在下载远程配置", "Downloading remote manifest"),
@@ -266,7 +263,10 @@ enum Msg {
     FAILURE_REASON_SERVER_BUSY("更新服务器暂时不可用，请稍后重试", "The update server is temporarily unavailable; try again later"),
     UI_SCALE_INFO("界面缩放 %s 倍（来源 %s；屏幕 %s，DPI %s，AWT 变换 %s，移动启动器 %s）", "UI scale %sx (source %s; screen %s, DPI %s, AWT transform %s, mobile launcher %s)"),
     UI_SCALE_NEEDS_A_NUMBER("--ui-scale 需要一个数字: %s", "--ui-scale needs a number: %s"),
-    UI_SCALE_NOTE("  - 界面缩放：-Dmml.serverSync.uiScale=2.5 / MML_SERVER_SYNC_UI_SCALE / --ui-scale=；移动启动器自动按固定倍数放大。", "  - UI scale: -Dmml.serverSync.uiScale=2.5 / MML_SERVER_SYNC_UI_SCALE / --ui-scale=; mobile launchers are scaled automatically.");
+    UI_SCALE_NOTE("  - 界面缩放：-Dmml.serverSync.uiScale=2.5 / MML_SERVER_SYNC_UI_SCALE / --ui-scale=；移动启动器自动按固定倍数放大。", "  - UI scale: -Dmml.serverSync.uiScale=2.5 / MML_SERVER_SYNC_UI_SCALE / --ui-scale=; mobile launchers are scaled automatically."),
+    UPDATE_INDEX_FROM_FILE("自更新索引取自配置文件 %s: %s", "Self-update index from config file %s: %s"),
+    UPDATE_INDEX_DEFAULT_USED("没有指定索引且没有配置文件，使用默认 %s", "No index given and no config file; using default %s"),
+    UPDATE_INDEX_FILE_UNREADABLE("自更新索引配置文件读不了，按未配置处理: %s (%s)", "Cannot read the self-update index config, treating it as unset: %s (%s)");
 
     private final String zh;
     private final String en;
