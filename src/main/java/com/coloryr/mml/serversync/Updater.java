@@ -100,6 +100,9 @@ final class Updater {
         }
         String index = indexText == null ? "" : indexText.trim();
         if (index.isEmpty()) {
+            index = systemIndex();
+        }
+        if (index.isEmpty()) {
             index = configIndex();
         }
         if (index.isEmpty()) {
@@ -153,6 +156,25 @@ final class Updater {
         writeSidecar(target, SHA256_SIDECAR, sha256);
         prune(dir, target);
         Log.info(Text.of(Msg.UPDATER_DOWNLOADED, target));
+    }
+
+    /**
+     * 读命令行之外的显式索引来源：JVM 属性优先，其次环境变量。
+     *
+     * javaagent 模式由 {@code Agent} 把它们翻成 {@code --update-index} 传下来；
+     * 独立运行（{@code -jar}）没有那一步，所以这里再兜底一次，两种模式行为一致。
+     *
+     * # 返回值
+     *
+     * 显式指定的索引地址；都没有时是空串
+     */
+    private static String systemIndex() {
+        String property = System.getProperty("mml.serverSync.updateIndex", "").trim();
+        if (!property.isEmpty()) {
+            return property;
+        }
+        String env = System.getenv("MML_SERVER_SYNC_INDEX");
+        return env == null ? "" : env.trim();
     }
 
     /**

@@ -2,3 +2,4 @@ build/
 .gradle/
 doc/
 /.idea
+test/
