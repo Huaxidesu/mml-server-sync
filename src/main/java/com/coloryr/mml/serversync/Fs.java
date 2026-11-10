@@ -94,16 +94,6 @@ final class Fs {
         return out.toString().toLowerCase(Locale.ROOT);
     }
 
-    /**
-     * 只删这一个文件。
-     *
-     * 玩家手动停用的 `.disabled` / `.disable` 副本一律保留：那是玩家的选择，
-     * 而且保留文件可以让「以后重新启用」不必重新下载。
-     */
-    static void deleteFile(Path file) throws IOException {
-        Files.deleteIfExists(file);
-    }
-
     static void deleteDirectory(Path dir) throws IOException {
         if (!Files.exists(dir)) {
             return;

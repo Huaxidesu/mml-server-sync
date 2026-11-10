@@ -4,7 +4,7 @@ MML 服务器实例的独立更新器：读取 MML 生成的 `server.json`，在
 基础文件同步到 **游戏目录**。供 PCL2 / HMCL / Prism / MultiMC 等非 MML 启动器使用，
 不兼容 HMCL `server-manifest.json` 或其他清单格式。
 
-当前版本 **1.5.2**，更新记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **1.9.0**，更新记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 特性
 

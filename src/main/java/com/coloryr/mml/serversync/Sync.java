@@ -60,6 +60,17 @@ final class Sync {
      * 此时本轮不执行任何删除，也不清空归档目录。
      */
     private boolean rulesAvailable = true;
+    /**
+     * 本轮是否真的读到过旁文件。指纹命中与包版本未变两条快速路径不读旁文件，
+     * 此时屏蔽范围未知：归位只改名，不清理重复副本。
+     */
+    private boolean rulesFetched;
+    /** 本轮按清单改名的文件数 */
+    private int renamedCount;
+    /** 本轮内容一致、跳过下载的清单条目数 */
+    private int skippedCount;
+    /** 本轮删除的文件数（含禁用变体） */
+    private int removedCount;
 
     Sync(Options options, Progress ui) {
         this.options = options;
@@ -161,8 +172,10 @@ final class Sync {
         if (!options.force && sameVersion(old, current)) {
             info(Text.of(Msg.PACK_VERSION_UNCHANGED_DETAIL, current.packVersion));
             String summary = Text.of(Msg.PACK_VERSION_UNCHANGED_SKIPPING_SYNC);
-            // 版本没变照样要弹：玩家每次启动都该有一次改选的机会，选完当场归位
-            String prompted = promptOnUnchanged(current, changedOptionals.size(), manifestUrl);
+            // 版本没变照样要弹：玩家每次启动都该有一次改选的机会，选完当场归位。
+            // 清单可能已经改了（发布端漏了递增版本），所以还要按 Optional 标记的差异归位。
+            String prompted = promptOnUnchanged(current, changedOptionals.size(), manifestUrl,
+                    changedOptionalFlags(old, current));
             return prompted == null ? summary : prompted;
         }
 
@@ -290,6 +303,9 @@ final class Sync {
         ui.stage(Text.of(Msg.SAVING_STATE));
         saveState(data);
         OptionalState.save(options.stateDir, OptionalState.entries(selections, hashesOf(current)));
+        // 收尾计数：玩家反馈「没下载某个模组」时，看这四类计数就能判断走了哪条路径
+        info(Text.of(Msg.SYNC_SUMMARY, renamedCount, files.size() + archiveCount + (needBase ? 1 : 0),
+                skippedCount, removedCount));
         return Text.of(Msg.SYNC_COMPLETE_VERSION, current.packVersion);
     }
 
@@ -310,7 +326,7 @@ final class Sync {
         }
         checkCancelled();
         consumeChoice();
-        applySelections(current);
+        applySelections(current, null);
     }
 
     /**
@@ -345,10 +361,19 @@ final class Sync {
         return changed;
     }
 
-    /** 按勾选把文件归位，并把启用 / 禁用条数写进日志 */
-    private void applySelections(Manifest current) throws IOException {
+    /**
+     * 按清单把文件归位，并把启用 / 禁用条数写进日志
+     *
+     * - `current`: 清单
+     * - `onlyPaths`: 只处理这些路径（规范化键）；null 表示整份清单
+     *
+     * # 返回值
+     *
+     * 本轮改名的文件数
+     */
+    private int applySelections(Manifest current, Set<String> onlyPaths) throws IOException {
         ui.stage(Text.of(Msg.OPTIONAL_APPLY_STAGE));
-        reconcileOptionalFiles(current);
+        int renamed = reconcileManagedFiles(current, onlyPaths);
         int enabled = 0;
         int disabled = 0;
         for (Manifest.FileEntry item : current.files) {
@@ -362,37 +387,117 @@ final class Sync {
             }
         }
         info(Text.of(Msg.OPTIONAL_APPLY_COUNT, enabled, disabled));
+        return renamed;
     }
 
     /**
-     * 按勾选把自选模组文件归位：勾选 = 清单路径（启用），未勾选 = 加 .disabled（禁用）。
-     * 内容在下载阶段已就位，这里通常只是改名；另一侧变体清掉，避免同名双份。
+     * 按清单把文件归位：必装条目一律启用，自选条目按勾选启用或加 .disabled。
+     * 内容在下载阶段已就位，这里通常只是改名；同一模组的其它变体清掉，避免同名双份。
+     *
+     * 必装条目同样参与归位，是本次功能的核心：发布端把自选模组改成必装时，
+     * 玩家本地只有 `.disabled` 副本，内容与清单一致就不必重新下载，改名即可启用。
+     *
+     * 归位在下载之后执行：内容不一致的条目此时已被下载覆盖到目标路径，
+     * 因此「先改名再下载」导致目标被误判为已存在的情况不会发生。
+     *
+     * - `current`: 清单
+     * - `onlyPaths`: 只处理这些路径（规范化键）；null 表示整份清单
+     *
+     * # 返回值
+     *
+     * 本轮改名的文件数
      */
-    private void reconcileOptionalFiles(Manifest current) throws IOException {
+    private int reconcileManagedFiles(Manifest current, Set<String> onlyPaths) throws IOException {
+        if (onlyPaths != null && onlyPaths.isEmpty()) {
+            return 0;
+        }
+        String selfKey = Fs.pathKey(selfJarRelative());
+        List<String> archiveDirs = archiveDirsOf(current);
+        // 旁文件没读到时不清理重复副本：无法确认哪些路径受屏蔽保护
+        boolean deleteStale = !options.noDelete && rulesFetched && rulesAvailable;
+        int renamed = 0;
         for (Manifest.FileEntry item : current.files) {
-            if (!item.optional || rules.isIgnored(item.path)) {
+            if (rules.isIgnored(item.path)) {
                 continue;
             }
-            Path target = Fs.resolveSafe(options.gameDir, item.path);
-            boolean selected = Boolean.TRUE.equals(selections.get(item.path));
+            String key = Fs.pathKey(item.path);
+            if (onlyPaths != null && !onlyPaths.contains(key)) {
+                continue;
+            }
+            if (!selfKey.isEmpty() && key.equals(selfKey)) {
+                continue;
+            }
+            if (insideArchive(key, archiveDirs)) {
+                continue;
+            }
+            Path target;
+            try {
+                target = Fs.resolveSafe(options.gameDir, item.path);
+            } catch (IOException | RuntimeException e) {
+                info(Text.of(Msg.MANAGED_BAD_PATH, item.path));
+                continue;
+            }
+            // 必装条目强制启用；自选条目沿用玩家勾选
+            boolean selected = !item.optional || Boolean.TRUE.equals(selections.get(item.path));
             Path desired = selected ? target : withSuffix(target, DISABLED_SUFFIX);
             Path existing = existingVariant(target);
             if (existing == null) {
                 continue;
             }
             if (!existing.equals(desired)) {
-                moveReplace(existing, desired);
-                info(Text.of(Msg.OPTIONAL_RENAMED, existing.getFileName().toString(),
-                        desired.getFileName().toString()));
-            }
-            // 旁文件不可用时只改名不删旧副本：无法确认被保护的范围
-            if (!options.noDelete && rulesAvailable) {
-                Path stale = selected ? withSuffix(target, DISABLED_SUFFIX) : target;
-                if (!stale.equals(desired) && !stale.equals(existing)) {
-                    Files.deleteIfExists(stale);
+                // 内容对不上时不得抢在下载之前改名：否则下载计划会把目标当成已存在
+                if (!Downloader.matches(existing, item.sha1, item.sha256)) {
+                    continue;
+                }
+                try {
+                    moveReplace(existing, desired);
+                    renamed++;
+                    renamedCount++;
+                    info(Text.of(Msg.MANAGED_RENAMED, existing.getFileName().toString(),
+                            desired.getFileName().toString()));
+                } catch (IOException e) {
+                    // 文件被占用、权限不足：保持原状，下一轮重试，不因此中断启动
+                    info(Text.of(Msg.MANAGED_RENAME_FAILED, existing.getFileName().toString(),
+                            desired.getFileName().toString(), describe(e)));
+                    continue;
                 }
             }
+            if (deleteStale) {
+                deleteOtherVariants(target, desired);
+            }
         }
+        return renamed;
+    }
+
+    /**
+     * 删掉同一路径的其它变体，只留 `desired`
+     *
+     * 同一模组同时存在 `x.jar` 与 `x.jar.disabled` 时，Forge 只会加载其中一个，
+     * 留两份既占磁盘也让排查变复杂。旧后缀 `.disable` 的残留一并清掉。
+     *
+     * - `target`: 清单里的原始路径
+     * - `desired`: 归位后的路径
+     */
+    private void deleteOtherVariants(Path target, Path desired) {
+        for (String suffix : new String[]{"", DISABLED_SUFFIX, LEGACY_DISABLE_SUFFIX}) {
+            Path candidate = suffix.isEmpty() ? target : withSuffix(target, suffix);
+            if (candidate.equals(desired) || !Files.isRegularFile(candidate)) {
+                continue;
+            }
+            try {
+                Files.deleteIfExists(candidate);
+                info(Text.of(Msg.MANAGED_STALE_REMOVED, candidate.getFileName().toString()));
+            } catch (IOException e) {
+                info(Text.of(Msg.MANAGED_STALE_FAILED, candidate.getFileName().toString(),
+                        describe(e)));
+            }
+        }
+    }
+
+    /** 异常的一句话说明：没有 message 时退回类型名 */
+    private static String describe(Exception e) {
+        String message = e.getMessage();
+        return message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message;
     }
 
     private static void moveReplace(Path from, Path to) throws IOException {
@@ -541,7 +646,8 @@ final class Sync {
         ui.title((local.name.isEmpty() ? Text.of(Msg.SERVER_INSTANCE) : local.name)
                 + " · " + packVersionOf(local));
         List<Manifest.FileEntry> changed = prepareOptionals(local);
-        return promptOnUnchanged(local, changed.size(), manifestUrl);
+        // 指纹一致说明清单字节没变，Optional 标记不可能变化：无需按差异归位
+        return promptOnUnchanged(local, changed.size(), manifestUrl, Collections.emptySet());
     }
 
     /**
@@ -551,41 +657,53 @@ final class Sync {
      * 不必等下一次真正的同步。归位本身出错只记日志：这条路径一个文件都没下载过，
      * 不该因为改名失败拦住启动，下次启动会照原样重试。
      *
+     * 归位不只服务于勾选变化：发布端把自选模组改成必装、却没递增 `PackVersion` 时，
+     * 本地停用的副本也要改回启用名，否则玩家要等到下一次版本递增才生效。
+     * 这类归位只处理两版清单之间 `Optional` 标记变过的路径，避免每次启动扫描整份清单。
+     *
      * @param current      清单，用于组装行与归位
      * @param changedCount 新增或内容变化的可选条目数
      * @param manifestUrl  清单地址，用于取发布端写的简介
+     * @param migrated     两版清单之间 Optional 标记变过的路径（规范化键）
      *
      * # 返回值
      *
-     * 玩家改过选择时的一句话结果；不弹或没改动时为 null
+     * 玩家改过选择或发生过归位时的一句话结果；什么都没做时为 null
      */
-    private String promptOnUnchanged(Manifest current, int changedCount, String manifestUrl) {
-        if (!shouldPrompt(changedCount)) {
+    private String promptOnUnchanged(Manifest current, int changedCount, String manifestUrl,
+                                     Set<String> migrated) {
+        boolean changed = false;
+        if (shouldPrompt(changedCount)) {
+            optionalNotes = fetchOptionalNotes(manifestUrl);
+            ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
+            PendingChoice pending = openDialog(buildRows(current),
+                    promptHeader(changedCount, countOptionals(current)), promptSuppressed);
+            if (pending == null) {
+                return null;
+            }
+            try {
+                pending.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+            changed = consumeChoice();
+        }
+        if (!changed && migrated.isEmpty()) {
             return null;
         }
-        optionalNotes = fetchOptionalNotes(manifestUrl);
-        ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
-        PendingChoice pending = openDialog(buildRows(current),
-                promptHeader(changedCount, countOptionals(current)), promptSuppressed);
-        if (pending == null) {
-            return null;
-        }
+        int renamed = 0;
         try {
-            pending.await();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
-        }
-        if (!consumeChoice()) {
-            return null;
-        }
-        try {
-            applySelections(current);
+            // 玩家改过选择时整份清单归位（沿用原有行为）；否则只处理标记变过的路径
+            renamed = applySelections(current, changed ? null : migrated);
             OptionalState.save(options.stateDir, OptionalState.entries(selections, hashesOf(current)));
         } catch (IOException e) {
             Log.error(Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
         }
-        return Text.of(Msg.OPTIONAL_CHOICES_SAVED);
+        if (changed) {
+            return Text.of(Msg.OPTIONAL_CHOICES_SAVED);
+        }
+        return renamed > 0 ? Text.of(Msg.MANAGED_REALIGNED, renamed) : null;
     }
 
     /** 弹窗行数据：状态区分新增 / 需更新 / 已同步，并带当前启用状态后缀 */
@@ -773,6 +891,38 @@ final class Sync {
     }
 
     /**
+     * 两版清单之间 `Optional` 标记变过的路径
+     *
+     * 发布端把自选模组改成必装（或反向）时，玩家本地文件的状态要跟着归位。
+     * 包版本未变的路径上不下载任何文件，因此只对这批路径执行归位，
+     * 避免每次启动都去 stat 整份清单的近两万个条目。
+     *
+     * - `old`: 本地留存的上一份清单
+     * - `current`: 本次清单
+     *
+     * # 返回值
+     *
+     * 规范化路径键集合；没有旧清单时为空
+     */
+    private static Set<String> changedOptionalFlags(Manifest old, Manifest current) {
+        Set<String> out = new java.util.HashSet<>();
+        if (old == null) {
+            return out;
+        }
+        Map<String, Boolean> before = new HashMap<>();
+        for (Manifest.FileEntry item : old.files) {
+            before.put(Fs.pathKey(item.path), item.optional);
+        }
+        for (Manifest.FileEntry item : current.files) {
+            Boolean was = before.get(Fs.pathKey(item.path));
+            if (was != null && was.booleanValue() != item.optional) {
+                out.add(Fs.pathKey(item.path));
+            }
+        }
+        return out;
+    }
+
+    /**
      * 取清单同目录下的同步规则旁文件。
      *
      * 读到且能解析：按规则执行。其余任何情况（404、超时、5xx、返回网页、JSON 坏）
@@ -785,10 +935,12 @@ final class Sync {
     private SyncRules fetchSyncRules(String manifestUrl) {
         try {
             SyncRules loaded = SyncRules.parse(downloader.fetchQuiet(manifestUrl + ".sync.json"));
+            rulesFetched = true;
             rulesAvailable = true;
             info(Text.of(Msg.SYNC_RULES_LOADED, loaded.removed.size(), loaded.ignoreCount()));
             return loaded;
         } catch (IOException | RuntimeException e) {
+            rulesFetched = true;
             rulesAvailable = false;
             String reason = e.getMessage() == null || e.getMessage().trim().isEmpty()
                     ? e.getClass().getSimpleName() : e.getMessage();
@@ -823,13 +975,7 @@ final class Sync {
             live.add(Fs.pathKey(item.path));
         }
         // 归档目录内的文件由压缩包负责：条目已从清单移除、但归档未重解压时删了不会补回来
-        List<String> archiveDirs = new ArrayList<>();
-        for (Manifest.ArchiveEntry item : current.archives) {
-            String dir = Fs.pathKey(item.dir);
-            if (!dir.isEmpty()) {
-                archiveDirs.add(dir);
-            }
-        }
+        List<String> archiveDirs = archiveDirsOf(current);
         String selfKey = Fs.pathKey(selfJar);
 
         // 删除列表与本地同步记录无关：首次同步、跨版本升级都能一次收敛。
@@ -840,12 +986,17 @@ final class Sync {
         int archiveHit = 0;
         Set<String> queued = new java.util.HashSet<>();
         for (String path : rules.removed) {
-            String key = Fs.pathKey(path);
+            // 删除列表可以写启用名，也可以写禁用变体：统一按去掉后缀的路径处理，
+            // 一条规则即可覆盖 x.jar / x.jar.disabled / x.jar.disable 三种状态。
+            String base = stripVariantSuffix(path);
+            String key = Fs.pathKey(base);
             if (key.isEmpty()) {
                 info(Text.of(Msg.SYNC_RULES_BAD_PATH, path));
                 continue;
             }
-            if (live.contains(key) || live.contains(SyncRules.stripDisabledSuffix(key))) {
+            // 清单里仍在的路径绝不删，连同它的禁用变体一起保护
+            if (live.contains(key) || live.contains(key + DISABLED_SUFFIX)
+                    || live.contains(key + LEGACY_DISABLE_SUFFIX)) {
                 liveHit++;
                 continue;
             }
@@ -860,14 +1011,14 @@ final class Sync {
                 archiveHit++;
                 continue;
             }
-            Path target = safeRemovalTarget(path);
-            // 只处理清单里那个名字：玩家停用的 .disabled 副本不在删除范围内，
-            // 因此只有该名字存在时才排进计划；删除列表可以长期挂在发布端。
-            if (target == null || !Files.isRegularFile(target) || !queued.add(key)) {
+            Path target = safeRemovalTarget(base);
+            // 只有禁用副本时同样排进计划：该路径已不在清单里，留着不会再用到。
+            // 删除列表可以长期挂在发布端，路径不存在时静默跳过。
+            if (target == null || existingVariant(target) == null || !queued.add(key)) {
                 continue;
             }
-            retiredPaths.add(path);
-            files.add(path);
+            retiredPaths.add(base);
+            files.add(base);
             retired++;
         }
         info(Text.of(Msg.RETIRED_PLAN_COUNT, retired));
@@ -921,6 +1072,18 @@ final class Sync {
         // 而且会把玩家改过的 config 一起删掉。需要清理时保留/新增 Over=true 的包，
         // 覆盖解压时会先删旧目录；不再提供「删条目 = 删目录」。
         dirs.sort(Comparator.comparingInt((String dir) -> -depth(dir)));
+    }
+
+    /** 当前清单的归档解压目录（规范化键），用于保护归档内的文件不被逐文件删除或改名 */
+    private static List<String> archiveDirsOf(Manifest manifest) {
+        List<String> out = new ArrayList<>();
+        for (Manifest.ArchiveEntry item : manifest.archives) {
+            String dir = Fs.pathKey(item.dir);
+            if (!dir.isEmpty()) {
+                out.add(dir);
+            }
+        }
+        return out;
     }
 
     /** 路径是否落在任一归档解压目录内（含目录本身） */
@@ -998,15 +1161,12 @@ final class Sync {
                 info(Text.of(Msg.SYNC_RULES_BAD_PATH, path));
                 continue;
             }
-            Fs.deleteFile(target);
+            if (deleteVariants(target) == 0) {
+                continue;
+            }
             Msg reason = retiredPaths.contains(path)
                     ? Msg.REMOVING_RETIRED_FILE : Msg.REMOVING_OLD_FILE_PATH;
             info(Text.of(reason, path));
-            // 玩家停用的副本不动：保留文件，重新启用时不必重新下载
-            if (Files.isRegularFile(withSuffix(target, DISABLED_SUFFIX))
-                    || Files.isRegularFile(withSuffix(target, LEGACY_DISABLE_SUFFIX))) {
-                info(Text.of(Msg.RETIRED_KEPT_DISABLED, path));
-            }
         }
         for (String dir : dirs) {
             Path target = Fs.resolveSafe(options.gameDir, dir);
@@ -1015,6 +1175,52 @@ final class Sync {
                 info(Text.of(Msg.REMOVING_OLD_DIR, dir));
             }
         }
+    }
+
+    /**
+     * 删除一个路径及其禁用变体
+     *
+     * 只用于「已不在清单里」的路径：这些文件不会再用到，留着既占磁盘，也会让
+     * 「同一模组两份副本」的排查变复杂。仍在清单里的路径由计划阶段拦下。
+     *
+     * - `target`: 清单里记录的原始路径
+     *
+     * # 返回值
+     *
+     * 实际删掉的文件数
+     */
+    private int deleteVariants(Path target) throws IOException {
+        int count = 0;
+        for (String suffix : new String[]{"", DISABLED_SUFFIX, LEGACY_DISABLE_SUFFIX}) {
+            Path candidate = suffix.isEmpty() ? target : withSuffix(target, suffix);
+            if (!Files.isRegularFile(candidate)) {
+                continue;
+            }
+            Files.deleteIfExists(candidate);
+            count++;
+            removedCount++;
+            if (!suffix.isEmpty()) {
+                info(Text.of(Msg.RETIRED_DISABLED_REMOVED, candidate.getFileName().toString()));
+            }
+        }
+        return count;
+    }
+
+    /**
+     * 去掉路径末尾的禁用后缀，保留其余原始写法
+     *
+     * 与 {@link SyncRules#stripDisabledSuffix} 的区别是不折叠大小写：
+     * 结果要拿去拼真实文件路径，只有比较时才用规范化键。
+     */
+    private static String stripVariantSuffix(String path) {
+        String value = path == null ? "" : path.trim();
+        String lower = value.toLowerCase(Locale.ROOT);
+        for (String suffix : new String[]{DISABLED_SUFFIX, LEGACY_DISABLE_SUFFIX}) {
+            if (lower.endsWith(suffix)) {
+                return value.substring(0, value.length() - suffix.length());
+            }
+        }
+        return value;
     }
 
     /**
@@ -1043,6 +1249,7 @@ final class Sync {
             Path target = Fs.resolveSafe(options.gameDir, item.path);
             Path existing = existingVariant(target);
             if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
+                skippedCount++;
                 continue;
             }
             if (item.optional) {
